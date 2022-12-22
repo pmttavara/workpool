@@ -39,6 +39,20 @@ void spall_auto_init(char *filename);
 void spall_auto_quit(void);
 void spall_auto_thread_init(uint32_t _tid, size_t buffer_size, int64_t symbol_cache_size);
 void spall_auto_thread_quit(void);
+#if _MSC_VER && !__clang__
+#ifndef _PROCESSTHREADSAPI_H_
+extern __declspec(dllimport) int(__stdcall TlsSetValue)(unsigned long dwTlsIndex, void* lpTlsValue);
+#endif
+extern unsigned long spall_auto__tls_index; // DWORD
+#define spall__thread_on() TlsSetValue(spall_auto__tls_index, (void *)1)
+#define spall__thread_off() TlsSetValue(spall_auto__tls_index, (void *)0)
+#else
+#define spall__thread_off() 0
+#define spall__thread_on() 0
+#endif
+#define spall_auto_thread_init(tid, buffer_size, symbol_cache_size) (spall_auto_thread_init(tid, buffer_size, symbol_cache_size), spall__thread_on())
+#define spall_auto_thread_quit() (spall__thread_off(), spall_auto_thread_quit())
+
 
 #define SPALL_DEFAULT_BUFFER_SIZE (64 * 1024 * 1024)
 #define SPALL_DEFAULT_SYMBOL_CACHE_SIZE (100000)
@@ -74,17 +88,17 @@ static _Thread_local bool spall_thread_running = false;
 #include <pthread.h>
 #include <unistd.h>
 #else
-static inline unsigned long __builtin_clzl(uint64_t x) { unsigned long result; _BitScanReverse64(&result, x); return result; }
+static inline unsigned long __builtin_clzl(uint64_t x) { unsigned long result; _BitScanReverse64(&result, x); return result ^ 63; }
 static HANDLE process;
 #if _MSC_VER && !__clang__
-DWORD spall_auto__tls_index = 0xFFFFFFFF;
+static DWORD spall_auto__tls_index = 0xFFFFFFFF;
 #endif
 #endif
 
 
 // we're not checking overflow here...Don't do stupid things with input sizes
 SPALL_FN uint64_t next_pow2(uint64_t x) {
-	return 1 << (64 - __builtin_clzl(x - 1));
+	return 1ull << (64ull - __builtin_clzl(x - 1));
 }
 
 // This is not thread-safe... Use one per thread!
@@ -96,7 +110,7 @@ SPALL_FN void ah_init(AddrHash *ah, int64_t size) {
 	ah->hashes.len = next_pow2(size);
 	ah->hashes.arr = (int64_t *)malloc(sizeof(int64_t) * ah->hashes.len);
 
-	for (int64_t i = 0; i < ah->hashes.len; i++) {
+	for (uint64_t i = 0; i < ah->hashes.len; i++) {
 		ah->hashes.arr[i] = -1;
 	}
 }
@@ -166,7 +180,7 @@ SPALL_FN bool get_addr_name(void *addr, Name *name_ret) {
 			size_t len = symbol.si.NameLen;
 			Name name;
 			name.str = memcpy(calloc(len + 1, 1), (void *)str, len);
-			name.len = len;
+			name.len = (int)len;
 			*name_ret = name;
 			result = true;
 		}
@@ -474,7 +488,7 @@ void load_self(AddrHash *map) {
 
 #endif
 
-SPALL_NOINSTRUMENT void spall_auto_thread_init(uint32_t _tid, size_t buffer_size, int64_t symbol_cache_size) {
+SPALL_NOINSTRUMENT SPALL_FORCEINLINE void (spall_auto_thread_init)(uint32_t _tid, size_t buffer_size, int64_t symbol_cache_size) {
 	uint8_t *buffer = (uint8_t *)malloc(buffer_size);
 	spall_buffer = (SpallBuffer){ .data = buffer, .length = buffer_size };
 
@@ -486,12 +500,9 @@ SPALL_NOINSTRUMENT void spall_auto_thread_init(uint32_t _tid, size_t buffer_size
 	tid = _tid;
 	ah_init(&addr_map, symbol_cache_size);
 	spall_thread_running = true;
-#if _MSC_VER && !__clang__
-	TlsSetValue(spall_auto__tls_index, (void *)1);
-#endif
 }
 
-void spall_auto_thread_quit(void) {
+void (spall_auto_thread_quit)(void) {
 #if _MSC_VER && !__clang__
 	TlsSetValue(spall_auto__tls_index, (void *)0);
 #endif
@@ -502,7 +513,7 @@ void spall_auto_thread_quit(void) {
 }
 
 void spall_auto_init(char *filename) {
-	spall_ctx = spall_init_file_json(filename, get_rdtsc_multiplier());
+	spall_ctx = spall_init_file(filename, get_rdtsc_multiplier());
 	ah_init(&global_addr_map, 10000);
 	load_self(&global_addr_map);
 #if _WIN32
@@ -555,7 +566,7 @@ SPALL_NOINSTRUMENT void __cyg_profile_func_enter(void *fn, void *caller) {
 	}
 
 	// printf("Begin: \"%s\"\n", name.str);
-	spall_buffer_begin_ex(&spall_ctx, &spall_buffer, name.str, name.len, __rdtsc(), tid, 0);
+	spall_buffer_begin_ex(&spall_ctx, &spall_buffer, name.str, name.len, (double)__rdtsc(), tid, 0);
 	// spall_buffer_flush(&spall_ctx, &spall_buffer);
 	// spall_flush(&spall_ctx);
 	spall_thread_running = true;
@@ -568,7 +579,7 @@ SPALL_NOINSTRUMENT void __cyg_profile_func_exit(void *fn, void *caller) {
 	spall_thread_running = false;
 
 	// printf("End\n");
-	spall_buffer_end_ex(&spall_ctx, &spall_buffer, __rdtsc(), tid, 0);
+	spall_buffer_end_ex(&spall_ctx, &spall_buffer, (double)__rdtsc(), tid, 0);
 	// spall_buffer_flush(&spall_ctx, &spall_buffer);
 	// spall_flush(&spall_ctx);
 	spall_thread_running = true;
