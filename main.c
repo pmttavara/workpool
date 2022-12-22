@@ -1,11 +1,40 @@
+
+#define _CRT_SECURE_NO_WARNINGS
+
 #include "spall_auto.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdbool.h>
+
+#if !_WIN32
+
 #include <pthread.h>
 #include <sched.h>
+
+#else
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+
+typedef SSIZE_T ssize_t;
+typedef HANDLE pthread_t;
+typedef CRITICAL_SECTION pthread_mutex_t;
+
+#define pthread_create(thread, _, routine, userdata) (*(thread) = CreateThread(NULL, 0, (DWORD (*)(void *))routine, userdata, 0, NULL))
+#define pthread_join(thread, _) WaitForSingleObject(thread, INFINITE)
+#define pthread_mutex_init(m, _) InitializeCriticalSection(m)
+#define pthread_mutex_lock(m) EnterCriticalSection(m)
+#define pthread_mutex_unlock(m) LeaveCriticalSection(m)
+#define sched_yield() SwitchToThread()
+
+#define _Atomic volatile
+#define _Thread_local __declspec(thread)
+
+#endif
 
 
 typedef ssize_t tpool_task_proc(void *data);
@@ -103,7 +132,7 @@ void *tpool_worker(void *ptr) {
 
 			TPoolTask *task = tqueue_pop_safe(current_thread);
 			if (!task) {
-				printf("WTF! %lu, %lu\n", stale_done, stale_total);
+				printf("WTF! %"PRIu64", %"PRIu64"\n", stale_done, stale_total);
 				exit(0);
 			}
 
@@ -135,12 +164,12 @@ void thread_init(TPool *pool, Thread *thread, int idx) {
 }
 
 TPool *tpool_init(int child_thread_count) {
-	TPool *pool = malloc(sizeof(TPool));
+	TPool *pool = calloc(sizeof(TPool), 1);
 
 	int thread_count = child_thread_count + 1;
 
 	pool->thread_count = thread_count;
-	pool->threads = malloc(sizeof(Thread) * pool->thread_count);
+	pool->threads = calloc(sizeof(Thread), pool->thread_count);
 	pool->running = true;
 
 	// setup the main thread
@@ -174,7 +203,7 @@ ssize_t little_work(void *args) {
 		int64_t sibling_idx = (rand()) % pool->thread_count;
 		Thread *sibling_thread = &pool->threads[sibling_idx];
 
-		TPoolTask *task = malloc(sizeof(TPoolTask));
+		TPoolTask *task = calloc(sizeof(TPoolTask), 1);
 		task->do_work = little_work;
 		task->args = (void *)(uint64_t)(count);
 		
@@ -212,7 +241,7 @@ int main(void) {
 
 	mutex_lock(&current_thread->queue_lock);
 	for (int i = 0; i < initial_task_count; i++) {
-		TPoolTask *task = malloc(sizeof(TPoolTask));
+		TPoolTask *task = calloc(sizeof(TPoolTask), 1);
 		task->do_work = little_work;
 		task->args = (void *)(uint64_t)(i + 1);
 		tqueue_push(current_thread, task);
