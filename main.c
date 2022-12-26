@@ -24,16 +24,31 @@
 typedef SSIZE_T ssize_t;
 typedef HANDLE pthread_t;
 typedef CRITICAL_SECTION pthread_mutex_t;
+typedef CONDITION_VARIABLE pthread_cond_t;
 
 #define pthread_create(thread, _, routine, userdata) (*(thread) = CreateThread(NULL, 0, (DWORD (*)(void *))routine, userdata, 0, NULL))
 #define pthread_join(thread, _) WaitForSingleObject(thread, INFINITE)
 #define pthread_mutex_init(m, _) InitializeCriticalSection(m)
 #define pthread_mutex_lock(m) EnterCriticalSection(m)
+#define pthread_mutex_trylock(m) TryEnterCriticalSection(m)
 #define pthread_mutex_unlock(m) LeaveCriticalSection(m)
+#define pthread_cond_init(c, _) InitializeConditionVariable(c)
+#define pthread_cond_broadcast(c) WakeAllConditionVariable(c)
+#define pthread_cond_wait(c, m) SleepConditionVariableCS(c, m, INFINITE)
+#define pthread_cond_signal(c) WakeConditionVariable(c)
 #define sched_yield() SwitchToThread()
 
 #define _Atomic volatile
 #define _Thread_local __declspec(thread)
+
+static inline void usleep(__int64 usec) {
+    __int64 ft = -10 * usec;
+
+    HANDLE timer = CreateWaitableTimer(NULL, TRUE, NULL);
+    SetWaitableTimer(timer, (LARGE_INTEGER *)&ft, 0, NULL, NULL, 0);
+    WaitForSingleObject(timer, INFINITE);
+    CloseHandle(timer);
+}
 
 #endif
 
@@ -307,7 +322,7 @@ int main(void) {
 	spall_auto_init("pool_test.spall");
 	spall_auto_thread_init(0, SPALL_DEFAULT_BUFFER_SIZE, SPALL_DEFAULT_SYMBOL_CACHE_SIZE);
 
-	TPool *pool = tpool_init(12);
+	TPool *pool = tpool_init(4);
 
 	int initial_task_count = 10;
 
